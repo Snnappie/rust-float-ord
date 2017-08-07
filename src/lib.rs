@@ -13,7 +13,7 @@ use core::mem::transmute;
 
 /// A wrapper for floats, that implements total equality and ordering
 /// and hashing.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct FloatOrd<T>(pub T);
 
 macro_rules! float_ord_impl {
@@ -56,6 +56,75 @@ macro_rules! float_ord_impl {
 float_ord_impl!(f32, u32, 32);
 float_ord_impl!(f64, u64, 64);
 
+impl<T> Default for FloatOrd<T>
+    where T: Default
+{
+    fn default() -> FloatOrd<T> {
+        FloatOrd(T::default())
+    }
+}
+
+use core::ops::{Deref, Add, Sub, Mul, Div, Rem};
+
+impl<T> Deref for FloatOrd<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+macro_rules! float_ord_ops_impl {
+    ($t:ident, $f:ident) => {
+        // FloatOrd<T> + FloatOrd<T> impl
+        impl<T> $t for FloatOrd<T>
+            where T: $t<Output = T>
+        {
+            type Output = Self;
+            fn $f(self, rhs: Self) -> Self::Output {
+                FloatOrd((self.0).$f(rhs.0))
+            }
+        }
+
+        // FloatOrd<T> + T impl
+        impl <T> $t<T> for FloatOrd<T> where T: $t<Output = T> {
+            type Output = Self;
+            fn $f(self, rhs: T) -> Self::Output {
+                FloatOrd((self.0).$f(rhs))
+            }
+        }
+
+        // A few impl's of T + FloatOrd<U>
+        impl $t<FloatOrd<f64>> for f64 {
+            type Output = FloatOrd<f64>;
+            fn $f(self, rhs: FloatOrd<f64>) -> Self::Output {
+                FloatOrd((self).$f(rhs.0))
+            }
+        }
+
+        impl $t<FloatOrd<f32>> for f32 {
+            type Output = FloatOrd<f32>;
+            fn $f(self, rhs: FloatOrd<f32>) -> Self::Output {
+                FloatOrd((self).$f(rhs.0))
+            }
+        }
+
+        impl $t<FloatOrd<f64>> for f32 {
+            type Output = FloatOrd<f64>;
+            fn $f(self, rhs: FloatOrd<f64>) -> Self::Output {
+                FloatOrd((self as f64).$f(rhs.0))
+            }
+        }
+    }
+}
+
+float_ord_ops_impl!(Add, add);
+float_ord_ops_impl!(Div, div);
+float_ord_ops_impl!(Rem, rem);
+float_ord_ops_impl!(Mul, mul);
+float_ord_ops_impl!(Sub, sub);
+
+
+
 #[cfg(feature="pdqsort")]
 /// Sort a slice of floats.
 ///
@@ -71,7 +140,9 @@ float_ord_impl!(f64, u64, 64);
 /// float_ord::sort(&mut v);
 /// assert!(v == [-5.0, -3.0, 1.0, 2.0, 4.0]);
 /// ```
-pub fn sort<T>(v: &mut [T]) where FloatOrd<T>: Ord {
+pub fn sort<T>(v: &mut [T])
+    where FloatOrd<T>: Ord
+{
     let v_: &mut [FloatOrd<T>] = unsafe { transmute(v) };
     pdqsort::sort(v_);
 }
@@ -85,6 +156,7 @@ mod tests {
     use self::std::prelude::v1::*;
     use self::std::collections::hash_map::DefaultHasher;
     use self::std::hash::{Hash, Hasher};
+    use self::std::f64;
     use super::FloatOrd;
 
     #[test]
@@ -116,7 +188,8 @@ mod tests {
                     .map(|x| x % (1 << l) as i64 as f64)
                     .take((1 << n))
                     .collect::<Vec<_>>();
-                assert!(v.windows(2).all(|w| (w[0] <= w[1]) == (FloatOrd(w[0]) <= FloatOrd(w[1]))));
+                assert!(v.windows(2)
+                            .all(|w| (w[0] <= w[1]) == (FloatOrd(w[0]) <= FloatOrd(w[1]))));
             }
         }
     }
@@ -133,10 +206,14 @@ mod tests {
         assert_ne!(hash(FloatOrd(0.0f32)), hash(FloatOrd(-0.0f32)));
         assert_eq!(hash(FloatOrd(-0.0f64)), hash(FloatOrd(-0.0f64)));
         assert_eq!(hash(FloatOrd(0.0f32)), hash(FloatOrd(0.0f32)));
-        assert_ne!(hash(FloatOrd(::core::f64::NAN)), hash(FloatOrd(-::core::f64::NAN)));
-        assert_ne!(hash(FloatOrd(::core::f32::NAN)), hash(FloatOrd(-::core::f32::NAN)));
-        assert_eq!(hash(FloatOrd(::core::f64::NAN)), hash(FloatOrd(::core::f64::NAN)));
-        assert_eq!(hash(FloatOrd(-::core::f32::NAN)), hash(FloatOrd(-::core::f32::NAN)));
+        assert_ne!(hash(FloatOrd(::core::f64::NAN)),
+                   hash(FloatOrd(-::core::f64::NAN)));
+        assert_ne!(hash(FloatOrd(::core::f32::NAN)),
+                   hash(FloatOrd(-::core::f32::NAN)));
+        assert_eq!(hash(FloatOrd(::core::f64::NAN)),
+                   hash(FloatOrd(::core::f64::NAN)));
+        assert_eq!(hash(FloatOrd(-::core::f32::NAN)),
+                   hash(FloatOrd(-::core::f32::NAN)));
     }
 
     #[cfg(feature="pdqsort")]
@@ -181,5 +258,21 @@ mod tests {
         assert!(v[5] == 5.0);
         assert!(v[6].is_nan());
         assert!(v[7].is_nan());
+    }
+
+    #[test]
+    fn test_add() {
+        assert_eq!(FloatOrd(1.5) + FloatOrd(1.5), FloatOrd(1.5 + 1.5));
+        assert_eq!(1.5 + FloatOrd(1.5), FloatOrd(1.5 + 1.5));
+        assert_eq!(FloatOrd(1.5) + 1.5, FloatOrd(1.5 + 1.5));
+    }
+
+    #[test]
+    fn test_deref() {
+        // Should be able to call methods exposed on floats directly.
+        let f = FloatOrd(2.71828_f64);
+        assert_eq!(f.floor(), 2.0);
+        assert_eq!(f.ceil(), 3.0);
+        assert_eq!(f.round(), 3.0);
     }
 }
